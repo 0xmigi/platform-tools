@@ -86,6 +86,34 @@ jobs:
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
         name: platform-tools-windows-x86_64.tar.bz2
+    - name: Ship one set of sbpf libraries in every tarball
+      # Each runner compiles the sbpf*-solana-solana Rust libraries and the newlib
+      # C libraries itself. The machine code comes out the same, but the files
+      # don't (crate hashes, build paths, codegen-unit grouping), so a program
+      # built with the macOS tarball never byte-matches the same program built
+      # with the Linux one. Use the Linux x86 copies everywhere; each tarball
+      # keeps its own host compiler. Windows ships no newlib, so it only gets
+      # the Rust libraries.
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir ref
+        tar -xjf platform-tools-linux-x86_64.tar.bz2 -C ref --wildcards \
+          './rust/lib/rustlib/sbpf*-solana-solana' './llvm/lib/lib[cm].a' './llvm/lib/sbpf*/lib[cm].a'
+        for t in platform-tools-linux-aarch64 platform-tools-osx-aarch64 platform-tools-windows-x86_64; do
+          mkdir "$t"
+          tar -xjf "$t.tar.bz2" -C "$t"
+          for d in ref/rust/lib/rustlib/sbpf*-solana-solana; do
+            rm -rf "$t/rust/lib/rustlib/$(basename "$d")"
+            cp -R "$d" "$t/rust/lib/rustlib/"
+          done
+          (cd ref/llvm/lib && find . -name 'lib[cm].a') | while read -r f; do
+            if [ -f "$t/llvm/lib/$f" ]; then cp "ref/llvm/lib/$f" "$t/llvm/lib/$f"; fi
+          done
+          tar -C "$t" -jcf "$t.tar.bz2" .
+          rm -rf "$t"
+        done
+        rm -rf ref
     - name: Create and push release tag
       env:
         RELEASE_TAG: ${{ inputs.tag }}
